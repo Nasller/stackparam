@@ -9,10 +9,10 @@ use std::slice;
 use std::os::raw::c_char;
 
 pub unsafe fn result_or_jni_ex<T>(res: T, jni_env: *mut JNIEnv) -> Result<T, String> {
-    if (**jni_env).ExceptionCheck.unwrap()(jni_env) == 1 {
+    if ((**jni_env).v1_4.ExceptionCheck)(jni_env) {
         // TODO: extract the exception info instead of dumping to stderr
-        (**jni_env).ExceptionDescribe.unwrap()(jni_env);
-        (**jni_env).ExceptionClear.unwrap()(jni_env);
+        ((**jni_env).v1_4.ExceptionDescribe)(jni_env);
+        ((**jni_env).v1_4.ExceptionClear)(jni_env);
         return Result::Err("Unexpected exception, logged to stderr".to_string());
     }
     return Result::Ok(res);

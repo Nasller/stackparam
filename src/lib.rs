@@ -10,7 +10,7 @@ pub mod bytecode;
 pub mod native;
 
 use jni_sys::{JavaVM, jint, jclass, jobject, JNIEnv, JNI_OK};
-use jvmti_sys::{jvmtiEnv, JVMTI_VERSION, jvmtiEventCallbacks, jvmtiCapabilities, jvmtiEventMode, jvmtiEvent, jthread, jvmtiEvent_JVMTI_EVENT_VM_INIT};
+use jvmti_sys::{jvmtiEnv, jvmtiEventCallbacks, jvmtiCapabilities, jvmtiEventMode, jvmtiEvent, jthread, jvmtiEvent_JVMTI_EVENT_VM_INIT, jvmtiEvent_JVMTI_EVENT_CLASS_FILE_LOAD_HOOK, jvmtiEventMode_JVMTI_ENABLE, JVMTI_VERSION_1_2};
 use std::os::raw::{c_char, c_void, c_uchar};
 use std::ffi::CStr;
 use std::mem::size_of;
@@ -22,9 +22,9 @@ pub unsafe extern "C" fn Agent_OnLoad(vm: *mut JavaVM,
                                       options: *mut c_char,
                                       _reserved: *mut c_void)
                                       -> jint {
-    debug!("Agent loading");
+    info!("Agent loading");
     match run(vm, options) {
-        Ok(()) => debug!("Agent loaded"),
+        Ok(()) => info!("Agent loaded"),
         Err(errStr) => info!("Agent unable to load: {}", errStr),
     }
     return 0;
@@ -33,7 +33,7 @@ pub unsafe extern "C" fn Agent_OnLoad(vm: *mut JavaVM,
 #[no_mangle]
 #[allow(non_snake_case)]
 pub extern "C" fn Agent_OnUnload(_vm: *mut JavaVM) {
-    debug!("Agent unloaded");
+    info!("Agent unloaded");
 }
 
 unsafe fn run(vm: *mut JavaVM, options: *mut c_char) -> Result<(), String> {
@@ -59,7 +59,7 @@ fn init(_options: *mut c_char) {
 
 unsafe fn get_env(vm: *mut JavaVM) -> Result<*mut jvmtiEnv, String> {
     let mut ptr: *mut c_void = ptr::null_mut() as *mut c_void;
-    let env_res = (**vm).GetEnv.unwrap()(vm, &mut ptr, JVMTI_VERSION as i32);
+    let env_res = ((**vm).v1_4.GetEnv)(vm, &mut ptr, JVMTI_VERSION_1_2);
     if env_res != JNI_OK {
         return Result::Err(format!("No environment, err: {}", env_res));
     }
@@ -90,12 +90,12 @@ unsafe fn set_event_callbacks(jvmti_env: *mut jvmtiEnv) -> Result<(), String> {
 
 unsafe fn enable_notifications(jvmti_env: *mut jvmtiEnv) -> Result<(), String> {
     enable_notification(jvmti_env, jvmtiEvent_JVMTI_EVENT_VM_INIT)?;
-    enable_notification(jvmti_env, jvmtiEvent::JVMTI_EVENT_CLASS_FILE_LOAD_HOOK)
+    enable_notification(jvmti_env, jvmtiEvent_JVMTI_EVENT_CLASS_FILE_LOAD_HOOK)
 }
 
 unsafe fn enable_notification(jvmti_env: *mut jvmtiEnv, event: jvmtiEvent) -> Result<(), String> {
     let mode_res = (**jvmti_env).SetEventNotificationMode.unwrap()(jvmti_env,
-                                                                   jvmtiEventMode::JVMTI_ENABLE,
+                                                                   jvmtiEventMode_JVMTI_ENABLE,
                                                                    event,
                                                                    ptr::null_mut());
     return util::unit_or_jvmti_err(mode_res);

@@ -1,15 +1,17 @@
 extern crate jni_sys;
 
-use log::LogLevel::{Debug, Trace};
-use jni_sys::{JNIEnv, jclass, jint, jlong, jfloat, jdouble, jobject, jmethodID, jfieldID, jstring, jobjectArray, jsize};
-use jvmti_sys::{jvmtiEnv, jthread, jvmtiFrameInfo, jvmtiLocalVariableEntry, jvmtiError};
-use std::ptr;
-use util;
-use std::os::raw::{c_char, c_uchar, c_uint, c_int, c_double};
-use std::slice;
-use std::ffi::{CStr, CString};
-use std::sync::{Once, ONCE_INIT};
+use std::ffi::{c_void, CStr, CString};
 use std::mem;
+use std::os::raw::{c_char, c_double, c_int, c_uchar, c_uint};
+use std::ptr;
+use std::slice;
+use std::sync::{Once, ONCE_INIT};
+
+use jni_sys::{jclass, jdouble, jfieldID, jfloat, jint, jlong, jmethodID, JNIEnv, jobject, jobjectArray, jsize, jstring, va_list};
+use log::Level::{Debug, Trace};
+
+use jvmti_sys::{jthread, jvmtiEnv, jvmtiError, jvmtiError_JVMTI_ERROR_ABSENT_INFORMATION, jvmtiFrameInfo, jvmtiLocalVariableEntry};
+use util;
 
 const DEFAULT_MAX_STACK_DEPTH: jint = 3000;
 
@@ -57,7 +59,7 @@ pub unsafe extern "C" fn Java_java_lang_Throwable_stackParamFillInStackTrace(jni
     unsafe fn set_param_to_null_ignore_err(jni_env: *mut JNIEnv, this: jobject) {
         let field = get_stack_params_field(jni_env).unwrap_or(ptr::null_mut());
         if !field.is_null() {
-            (**jni_env).SetObjectField.unwrap()(jni_env, this, field, ptr::null_mut());
+            ((**jni_env).v1_4.SetObjectField)(jni_env, this, field, ptr::null_mut());
             let _ = util::result_or_jni_ex((), jni_env);
         }
     }
@@ -96,7 +98,7 @@ unsafe fn append_param_to_string(jni_env: *mut JNIEnv, this: jobject) -> Result<
     }
     // Get the param info
     let param_info_field = get_elem_param_info_field(jni_env)?;
-    let param_info = util::result_or_jni_ex((**jni_env).GetObjectField.unwrap()(jni_env, this, param_info_field), jni_env)?;
+    let param_info = util::result_or_jni_ex(((**jni_env).v1_4.GetObjectField)(jni_env, this, param_info_field), jni_env)?;
     if param_info.is_null() {
         return Result::Ok(str);
     }
@@ -112,7 +114,7 @@ unsafe fn get_elem_str_orig(jni_env: *mut JNIEnv, this: jobject) -> Result<jobje
             // We swallow exceptions in here on purpose
             let meth_name_str = CString::new("$$stack_param$$toString").unwrap();
             let meth_sig_str = CString::new("()Ljava/lang/String;").unwrap();
-            STR_ORIG_METH = (**jni_env).GetMethodID.unwrap()(jni_env,
+            STR_ORIG_METH = ((**jni_env).v1_4.GetMethodID)(jni_env,
                                                              elem_class,
                                                              meth_name_str.as_ptr(),
                                                              meth_sig_str.as_ptr());
@@ -120,7 +122,7 @@ unsafe fn get_elem_str_orig(jni_env: *mut JNIEnv, this: jobject) -> Result<jobje
         }
     });
     if STR_ORIG_METH.is_null() { return Result::Err("No $$stack_param$$toString method".to_string()); }
-    return util::result_or_jni_ex((**jni_env).CallObjectMethod.unwrap()(jni_env, this, STR_ORIG_METH), jni_env);
+    return util::result_or_jni_ex(((**jni_env).v1_4.CallObjectMethod)(jni_env, this, STR_ORIG_METH), jni_env);
 }
 
 unsafe fn append_param_info(jni_env: *mut JNIEnv, str: jobject, param_info: jobject) -> Result<jobject, String> {
@@ -131,29 +133,28 @@ unsafe fn append_param_info(jni_env: *mut JNIEnv, str: jobject, param_info: jobj
         // We swallow exceptions in here on purpose
         let meth_name_str = CString::new("appendParamsToFrameString").unwrap();
         let meth_sig_str = CString::new("(Ljava/lang/String;[Ljava/lang/Object;)Ljava/lang/String;").unwrap();
-        APPEND_METH = (**jni_env).GetStaticMethodID.unwrap()(jni_env,
+        APPEND_METH = ((**jni_env).v1_4.GetStaticMethodID)(jni_env,
                                                              manip_class,
                                                              meth_name_str.as_ptr(),
                                                              meth_sig_str.as_ptr());
         let _ = util::result_or_jni_ex((), jni_env);
     });
     if APPEND_METH.is_null() { return Result::Err("No append method".to_string()); }
-    let ret = util::result_or_jni_ex((**jni_env).CallStaticObjectMethod.unwrap()(jni_env,
+    let ret = util::result_or_jni_ex(((**jni_env).v1_4.CallStaticObjectMethodV)(jni_env,
                                                                               manip_class,
                                                                               APPEND_METH,
-                                                                              str,
-                                                                              param_info), jni_env);
+                                                                              [str, param_info].as_mut_ptr() as va_list), jni_env);
     return ret;
 }
 
 unsafe fn get_manip_class(jni_env: *mut JNIEnv) -> Result<jclass, String> {
     let class_name_str = CString::new("stackparam/StackParamNative").unwrap();
-    return util::result_or_jni_ex((**jni_env).FindClass.unwrap()(jni_env, class_name_str.as_ptr()), jni_env);
+    return util::result_or_jni_ex(((**jni_env).v1_4.FindClass)(jni_env, class_name_str.as_ptr()), jni_env);
 }
 
 unsafe fn get_elem_class(jni_env: *mut JNIEnv) -> Result<jclass, String> {
     let class_name_str = CString::new("java/lang/StackTraceElement").unwrap();
-    return util::result_or_jni_ex((**jni_env).FindClass.unwrap()(jni_env, class_name_str.as_ptr()), jni_env);
+    return util::result_or_jni_ex(((**jni_env).v1_4.FindClass)(jni_env, class_name_str.as_ptr()), jni_env);
 }
 
 unsafe fn populate_trace_elements(jni_env: *mut JNIEnv, this: jobject) -> Result<jobject, String> {
@@ -161,7 +162,7 @@ unsafe fn populate_trace_elements(jni_env: *mut JNIEnv, this: jobject) -> Result
     // a non-null array with length greater than 0.
 
     // Grab the field value
-    let field_val = util::result_or_jni_ex((**jni_env).GetObjectField.unwrap()(jni_env,
+    let field_val = util::result_or_jni_ex(((**jni_env).v1_4.GetObjectField)(jni_env,
                                                                                this,
                                                                                get_stack_trace_field(jni_env)?), jni_env)?;
     // Defer to original method
@@ -173,7 +174,7 @@ unsafe fn populate_trace_elements(jni_env: *mut JNIEnv, this: jobject) -> Result
     }
 
     // Is the result array size over 0?
-    let ret_len = util::result_or_jni_ex((**jni_env).GetArrayLength.unwrap()(jni_env, ret), jni_env)?;
+    let ret_len = util::result_or_jni_ex(((**jni_env).v1_4.GetArrayLength)(jni_env, ret), jni_env)?;
     if ret_len == 0 {
         return Result::Ok(ret);
     }
@@ -183,23 +184,23 @@ unsafe fn populate_trace_elements(jni_env: *mut JNIEnv, this: jobject) -> Result
 }
 
 unsafe fn add_element_params(jni_env: *mut JNIEnv, this: jobject, elems: jobjectArray, elems_len: jsize) -> Result<(), String> {
-    let params = util::result_or_jni_ex((**jni_env).GetObjectField.unwrap()(jni_env,
+    let params = util::result_or_jni_ex(((**jni_env).v1_4.GetObjectField)(jni_env,
                                                                             this,
                                                                             get_stack_params_field(jni_env)?), jni_env)?;
     // If it's null we just treat it as empty
     let params_len = if params.is_null() {
         0
     } else {
-        util::result_or_jni_ex((**jni_env).GetArrayLength.unwrap()(jni_env, params), jni_env)?
+        util::result_or_jni_ex(((**jni_env).v1_4.GetArrayLength)(jni_env, params), jni_env)?
     };
 
     for index in 0..elems_len {
-        let elem = util::result_or_jni_ex((**jni_env).GetObjectArrayElement.unwrap()(jni_env, elems, index), jni_env)?;
+        let elem = util::result_or_jni_ex(((**jni_env).v1_4.GetObjectArrayElement)(jni_env, elems, index), jni_env)?;
         if !elem.is_null() {
             let param = if index >= params_len {
                 ptr::null_mut()
             } else {
-                util::result_or_jni_ex((**jni_env).GetObjectArrayElement.unwrap()(jni_env, params, index), jni_env)?
+                util::result_or_jni_ex(((**jni_env).v1_4.GetObjectArrayElement)(jni_env, params, index), jni_env)?
             };
             set_elem_param_info(jni_env, param, elem)?;
         }
@@ -216,7 +217,7 @@ unsafe fn get_elem_param_info_field(jni_env: *mut JNIEnv) -> Result<jfieldID, St
             // We swallow exceptions in here on purpose
             let field_name_str = CString::new("paramInfo").unwrap();
             let field_sig_str = CString::new("[Ljava/lang/Object;").unwrap();
-            PARAM_INFO_FIELD = (**jni_env).GetFieldID.unwrap()(jni_env,
+            PARAM_INFO_FIELD = ((**jni_env).v1_4.GetFieldID)(jni_env,
                                                                elem_class,
                                                                field_name_str.as_ptr(),
                                                                field_sig_str.as_ptr());
@@ -229,7 +230,7 @@ unsafe fn get_elem_param_info_field(jni_env: *mut JNIEnv) -> Result<jfieldID, St
 
 unsafe fn set_elem_param_info(jni_env: *mut JNIEnv, param_info: jobject, on: jobject) -> Result<(), String> {
     let param_info_field = get_elem_param_info_field(jni_env)?;
-    (**jni_env).SetObjectField.unwrap()(jni_env, on, param_info_field, param_info);
+    ((**jni_env).v1_4.SetObjectField)(jni_env, on, param_info_field, param_info);
     return util::result_or_jni_ex((), jni_env);
 }
 
@@ -242,7 +243,7 @@ unsafe fn get_our_trace_orig(jni_env: *mut JNIEnv, this: jobject) -> Result<jobj
             // We swallow exceptions in here on purpose
             let meth_name_str = CString::new("$$stack_param$$getOurStackTrace").unwrap();
             let meth_sig_str = CString::new("()[Ljava/lang/StackTraceElement;").unwrap();
-            TRACE_ORIG_METH = (**jni_env).GetMethodID.unwrap()(jni_env,
+            TRACE_ORIG_METH = ((**jni_env).v1_4.GetMethodID)(jni_env,
                                                                throwable_class,
                                                                meth_name_str.as_ptr(),
                                                                meth_sig_str.as_ptr());
@@ -250,7 +251,7 @@ unsafe fn get_our_trace_orig(jni_env: *mut JNIEnv, this: jobject) -> Result<jobj
         }
     });
     if TRACE_ORIG_METH.is_null() { return Result::Err("No $$stack_param$$getOurStackTrace method".to_string()); }
-    return util::result_or_jni_ex((**jni_env).CallObjectMethod.unwrap()(jni_env, this, TRACE_ORIG_METH), jni_env);
+    return util::result_or_jni_ex(((**jni_env).v1_4.CallObjectMethod)(jni_env, this, TRACE_ORIG_METH), jni_env);
 }
 
 unsafe fn get_stack_trace_field(jni_env: *mut JNIEnv) -> Result<jfieldID, String> {
@@ -262,7 +263,7 @@ unsafe fn get_stack_trace_field(jni_env: *mut JNIEnv) -> Result<jfieldID, String
             // We swallow exceptions in here on purpose
             let field_name_str = CString::new("stackTrace").unwrap();
             let field_sig_str = CString::new("[Ljava/lang/StackTraceElement;").unwrap();
-            STACK_TRACE_FIELD = (**jni_env).GetFieldID.unwrap()(jni_env,
+            STACK_TRACE_FIELD = ((**jni_env).v1_4.GetFieldID)(jni_env,
                                                                 throwable_class,
                                                                 field_name_str.as_ptr(),
                                                                 field_sig_str.as_ptr());
@@ -292,13 +293,13 @@ unsafe fn populate_stack_params(jni_env: *mut JNIEnv, this: jobject, thread: jth
     // Convert to object array
     let params_arr = params_to_object_array(jni_env, params)?;
     // Store in local field...
-    (**jni_env).SetObjectField.unwrap()(jni_env, this, get_stack_params_field(jni_env)?, params_arr);
+    ((**jni_env).v1_4.SetObjectField)(jni_env, this, get_stack_params_field(jni_env)?, params_arr);
     return util::result_or_jni_ex((), jni_env);
 }
 
 unsafe fn get_throwable_class(jni_env: *mut JNIEnv) -> Result<jclass, String> {
     let class_name_str = CString::new("java/lang/Throwable").unwrap();
-    return util::result_or_jni_ex((**jni_env).FindClass.unwrap()(jni_env, class_name_str.as_ptr()), jni_env);
+    return util::result_or_jni_ex(((**jni_env).v1_4.FindClass)(jni_env, class_name_str.as_ptr()), jni_env);
 }
 
 unsafe fn get_stack_params_field(jni_env: *mut JNIEnv) -> Result<jfieldID, String> {
@@ -310,7 +311,7 @@ unsafe fn get_stack_params_field(jni_env: *mut JNIEnv) -> Result<jfieldID, Strin
             // We swallow exceptions in here on purpose
             let field_name_str = CString::new("stackParams").unwrap();
             let field_sig_str = CString::new("[[Ljava/lang/Object;").unwrap();
-            STACK_PARAMS_FIELD = (**jni_env).GetFieldID.unwrap()(jni_env,
+            STACK_PARAMS_FIELD = ((**jni_env).v1_4.GetFieldID)(jni_env,
                                                                  throwable_class,
                                                                  field_name_str.as_ptr(),
                                                                  field_sig_str.as_ptr());
@@ -330,7 +331,7 @@ unsafe fn get_stack_trace_depth(jni_env: *mut JNIEnv, this: jobject) -> Result<j
             // We swallow exceptions in here on purpose
             let meth_name_str = CString::new("getStackTraceDepth").unwrap();
             let meth_sig_str = CString::new("()I").unwrap();
-            STACK_DEPTH_METH = (**jni_env).GetMethodID.unwrap()(jni_env,
+            STACK_DEPTH_METH = ((**jni_env).v1_4.GetMethodID)(jni_env,
                                                                 throwable_class,
                                                                 meth_name_str.as_ptr(),
                                                                 meth_sig_str.as_ptr());
@@ -338,7 +339,7 @@ unsafe fn get_stack_trace_depth(jni_env: *mut JNIEnv, this: jobject) -> Result<j
         }
     });
     if STACK_DEPTH_METH.is_null() { return Result::Err("No getStackTraceDepth method".to_string()); }
-    return util::result_or_jni_ex((**jni_env).CallIntMethod.unwrap()(jni_env, this, STACK_DEPTH_METH), jni_env)
+    return util::result_or_jni_ex(((**jni_env).v1_4.CallIntMethod)(jni_env, this, STACK_DEPTH_METH), jni_env)
 }
 
 #[no_mangle]
@@ -377,27 +378,27 @@ unsafe fn get_params_as_object_array(jni_env: *mut JNIEnv,
 
 unsafe fn params_to_object_array(jni_env: *mut JNIEnv, methods: Vec<MethodInfo>) -> Result<jobjectArray, String> {
     let obj_str = CString::new("java/lang/Object").unwrap();
-    let obj_class = util::result_or_jni_ex((**jni_env).FindClass.unwrap()(jni_env, obj_str.as_ptr()), jni_env)?;
+    let obj_class = util::result_or_jni_ex(((**jni_env).v1_4.FindClass)(jni_env, obj_str.as_ptr()), jni_env)?;
     let obj_arr_str = CString::new("[Ljava/lang/Object;").unwrap();
-    let obj_arr_class = util::result_or_jni_ex((**jni_env).FindClass.unwrap()(jni_env, obj_arr_str.as_ptr()), jni_env)?;
-    let ret = util::result_or_jni_ex((**jni_env).NewObjectArray.unwrap()(jni_env,
+    let obj_arr_class = util::result_or_jni_ex(((**jni_env).v1_4.FindClass)(jni_env, obj_arr_str.as_ptr()), jni_env)?;
+    let ret = util::result_or_jni_ex(((**jni_env).v1_4.NewObjectArray)(jni_env,
                                                                          methods.len() as jsize,
                                                                          obj_arr_class,
                                                                          ptr::null_mut()), jni_env)?;
     let mut unknown_param: jstring = ptr::null_mut();
     for (method_index, method) in methods.iter().enumerate() {
-        let param_arr = util::result_or_jni_ex((**jni_env).NewObjectArray.unwrap()(jni_env,
+        let param_arr = util::result_or_jni_ex(((**jni_env).v1_4.NewObjectArray)(jni_env,
                                                                                    (method.params.len() * 3) as jsize,
                                                                                    obj_class,
                                                                                    ptr::null_mut()), jni_env)?;
         for (param_index, param) in method.params.iter().enumerate() {
             // Goes: param name, param sig, val
-            (**jni_env).SetObjectArrayElement.unwrap()(jni_env,
+            ((**jni_env).v1_4.SetObjectArrayElement)(jni_env,
                                                        param_arr,
                                                        (param_index * 3) as jsize,
                                                        new_string(jni_env, param.name.as_ref())?);
             util::result_or_jni_ex((), jni_env)?;
-            (**jni_env).SetObjectArrayElement.unwrap()(jni_env,
+            ((**jni_env).v1_4.SetObjectArrayElement)(jni_env,
                                                        param_arr,
                                                        ((param_index * 3) + 1) as jsize,
                                                        new_string(jni_env, param.typ.as_ref())?);
@@ -411,10 +412,10 @@ unsafe fn params_to_object_array(jni_env: *mut JNIEnv, methods: Vec<MethodInfo>)
                     unknown_param
                 }
             };
-            (**jni_env).SetObjectArrayElement.unwrap()(jni_env, param_arr, ((param_index * 3) + 2) as jsize, val);
+            ((**jni_env).v1_4.SetObjectArrayElement)(jni_env, param_arr, ((param_index * 3) + 2) as jsize, val);
             util::result_or_jni_ex((), jni_env)?;
         }
-        (**jni_env).SetObjectArrayElement.unwrap()(jni_env, ret, method_index as jsize, param_arr);
+        ((**jni_env).v1_4.SetObjectArrayElement)(jni_env, ret, method_index as jsize, param_arr);
         util::result_or_jni_ex((), jni_env)?;
     }
     return Result::Ok(ret);
@@ -422,10 +423,10 @@ unsafe fn params_to_object_array(jni_env: *mut JNIEnv, methods: Vec<MethodInfo>)
 
 unsafe fn throw_ex_with_msg(jni_env: *mut JNIEnv, ex_class: &str, ex_msg: &str) -> Result<(), String> {
     let ex_class_str = CString::new(ex_class).unwrap();
-    let class = util::result_or_jni_ex((**jni_env).FindClass.unwrap()(jni_env,
+    let class = util::result_or_jni_ex(((**jni_env).v1_4.FindClass)(jni_env,
                                                                       ex_class_str.as_ptr()), jni_env)?;
     let ex_msg_str = CString::new(ex_msg).unwrap();
-    if (**jni_env).ThrowNew.unwrap()(jni_env, class, ex_msg_str.as_ptr()) < 0 {
+    if ((**jni_env).v1_4.ThrowNew)(jni_env, class, ex_msg_str.as_ptr()) < 0 {
         return util::result_or_jni_ex((), jni_env);
     }
     return Result::Ok(());
@@ -457,7 +458,7 @@ unsafe fn class_sig(class: jclass) -> Result<String, String> {
 }
 
 unsafe fn class_sig_from_obj(jni_env: *mut JNIEnv, obj: jobject) -> Result<String, String> {
-    let class = util::result_or_jni_ex((**jni_env).GetObjectClass.unwrap()(jni_env, obj), jni_env)?;
+    let class = util::result_or_jni_ex(((**jni_env).v1_4.GetObjectClass)(jni_env, obj), jni_env)?;
     return class_sig(class);
 }
 
@@ -509,7 +510,7 @@ unsafe fn get_frame_params(jni_env: *mut JNIEnv, thread: jthread, frame: &jvmtiF
 
 unsafe fn new_string(jni_env: *mut JNIEnv, str: &str) -> Result<jstring, String> {
     let cstr = CString::new(str).unwrap();
-    return util::result_or_jni_ex((**jni_env).NewStringUTF.unwrap()(jni_env, cstr.as_ptr()), jni_env);
+    return util::result_or_jni_ex(((**jni_env).v1_4.NewStringUTF)(jni_env, cstr.as_ptr()), jni_env);
 }
 
 unsafe fn get_this(thread: jthread, depth: jint) -> Result<jobject, String> {
@@ -524,52 +525,52 @@ unsafe fn get_local_var(jni_env: *mut JNIEnv, thread: jthread, depth: jint, slot
             let val = get_local_int(thread, depth, slot)?;
             let (box_class, box_meth) = primitive_box_methods(jni_env)?.boolean;
             util::result_or_jni_ex(
-                (**jni_env).CallStaticObjectMethod.unwrap()(jni_env, box_class, box_meth, val as c_uint), jni_env)
+                ((**jni_env).v1_4.CallStaticObjectMethodV)(jni_env, box_class, box_meth, [val as c_uint].as_mut_ptr() as va_list), jni_env)
         },
         "B" => {
             let val = get_local_int(thread, depth, slot)?;
             let (box_class, box_meth) = primitive_box_methods(jni_env)?.byte;
             util::result_or_jni_ex(
-                (**jni_env).CallStaticObjectMethod.unwrap()(jni_env, box_class, box_meth, val as c_int), jni_env)
+                ((**jni_env).v1_4.CallStaticObjectMethodV)(jni_env, box_class, box_meth, [val as c_int].as_mut_ptr() as va_list), jni_env)
         },
         "C" => {
             let val = get_local_int(thread, depth, slot)?;
             let (box_class, box_meth) = primitive_box_methods(jni_env)?.char;
             util::result_or_jni_ex(
-                (**jni_env).CallStaticObjectMethod.unwrap()(jni_env, box_class, box_meth, val as c_uint), jni_env)
+                ((**jni_env).v1_4.CallStaticObjectMethodV)(jni_env, box_class, box_meth, [val as c_uint].as_mut_ptr() as va_list), jni_env)
         },
         "S" => {
             let val = get_local_int(thread, depth, slot)?;
             let (box_class, box_meth) = primitive_box_methods(jni_env)?.short;
             util::result_or_jni_ex(
-                (**jni_env).CallStaticObjectMethod.unwrap()(jni_env, box_class, box_meth, val as c_int), jni_env)
+                ((**jni_env).v1_4.CallStaticObjectMethodV)(jni_env, box_class, box_meth, [val as c_int].as_mut_ptr() as va_list), jni_env)
         },
         "I" => {
             let val = get_local_int(thread, depth, slot)?;
             let (box_class, box_meth) = primitive_box_methods(jni_env)?.int;
             util::result_or_jni_ex(
-                (**jni_env).CallStaticObjectMethod.unwrap()(jni_env, box_class, box_meth, val), jni_env)
+                ((**jni_env).v1_4.CallStaticObjectMethodV)(jni_env, box_class, box_meth, [val].as_mut_ptr() as va_list), jni_env)
         },
         "J" => {
             let mut val: jlong = 0;
             util::unit_or_jvmti_err((**JVMTI_ENV).GetLocalLong.unwrap()(JVMTI_ENV, thread, depth, slot, &mut val))?;
             let (box_class, box_meth) = primitive_box_methods(jni_env)?.long;
             util::result_or_jni_ex(
-                (**jni_env).CallStaticObjectMethod.unwrap()(jni_env, box_class, box_meth, val), jni_env)
+                ((**jni_env).v1_4.CallStaticObjectMethodV)(jni_env, box_class, box_meth, [val].as_mut_ptr() as va_list), jni_env)
         },
         "F" => {
             let mut val: jfloat = 0.0;
             util::unit_or_jvmti_err((**JVMTI_ENV).GetLocalFloat.unwrap()(JVMTI_ENV, thread, depth, slot, &mut val))?;
             let (box_class, box_meth) = primitive_box_methods(jni_env)?.float;
             util::result_or_jni_ex(
-                (**jni_env).CallStaticObjectMethod.unwrap()(jni_env, box_class, box_meth, val as c_double), jni_env)
+                ((**jni_env).v1_4.CallStaticObjectMethodV)(jni_env, box_class, box_meth, [val as c_double].as_mut_ptr() as va_list), jni_env)
         },
         "D" => {
             let mut val: jdouble = 0.0;
             util::unit_or_jvmti_err((**JVMTI_ENV).GetLocalDouble.unwrap()(JVMTI_ENV, thread, depth, slot, &mut val))?;
             let (box_class, box_meth) = primitive_box_methods(jni_env)?.double;
             util::result_or_jni_ex(
-                (**jni_env).CallStaticObjectMethod.unwrap()(jni_env, box_class, box_meth, val as c_double), jni_env)
+                ((**jni_env).v1_4.CallStaticObjectMethodV)(jni_env, box_class, box_meth, [val as c_double].as_mut_ptr() as va_list), jni_env)
         },
         typ if typ.starts_with("[") || typ.starts_with("L") => {
             let mut val: jobject = ptr::null_mut();
@@ -710,7 +711,7 @@ unsafe fn apply_local_var_table(method: jmethodID, info: &mut MethodInfo) -> Res
     let mut entries: *mut jvmtiLocalVariableEntry = ptr::null_mut();
     let mut entry_count: jint = 0;
     let table_res = (**JVMTI_ENV).GetLocalVariableTable.unwrap()(JVMTI_ENV, method, &mut entry_count, &mut entries);
-    if table_res as u32 == jvmtiError::JVMTI_ERROR_ABSENT_INFORMATION as u32 {
+    if table_res as u32 == jvmtiError_JVMTI_ERROR_ABSENT_INFORMATION as u32 {
         // When information is absent, we don't care
         return Result::Ok(());
     }
@@ -786,11 +787,11 @@ unsafe fn primitive_box_methods(jni_env: *mut JNIEnv) -> Result<PrimitiveBoxMeth
     ONCE.call_once(|| {
         unsafe fn method_ref(jni_env: *mut JNIEnv, class_name: &str, method_desc: &str) -> Result<MethodRef, String> {
             let class_name_str = CString::new(class_name).unwrap();
-            let class = util::result_or_jni_ex((**jni_env).FindClass.unwrap()(jni_env,
+            let class = util::result_or_jni_ex(((**jni_env).v1_4.FindClass)(jni_env,
                                                                               class_name_str.as_ptr()), jni_env)?;
             let meth_name_str = CString::new("valueOf").unwrap();
             let desc_str = CString::new(method_desc).unwrap();
-            let method = util::result_or_jni_ex((**jni_env).GetStaticMethodID.unwrap()(jni_env,
+            let method = util::result_or_jni_ex(((**jni_env).v1_4.GetStaticMethodID)(jni_env,
                                                                                        class,
                                                                                        meth_name_str.as_ptr(),
                                                                                        desc_str.as_ptr()), jni_env)?;

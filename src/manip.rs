@@ -16,11 +16,11 @@ use bytecode::io::writer::ClassWriter;
 pub unsafe fn define_manip_class(jni_env: *mut JNIEnv) -> Result<(), String> {
     debug!("Defining class");
     // Get the bytes from file
-    let class_bytes = include_bytes!("../javalib/native/build/classes/main/stackparam/StackParamNative.class");
+    let class_bytes = include_bytes!("../javalib/native/build/classes/java/main/stackparam/StackParamNative.class");
     // Define the class
     let class_name = CString::new("stackparam/StackParamNative").unwrap();
     // We don't want the defined class, because it is not "prepared", we want to make them ask for it again
-    let _ = (**jni_env).DefineClass.unwrap()(jni_env,
+    let _ = ((**jni_env).v1_4.DefineClass)(jni_env,
                                              class_name.as_ref().as_ptr(),
                                              ptr::null_mut(),
                                              class_bytes.as_ptr() as *const jbyte,
@@ -225,7 +225,7 @@ unsafe fn get_method_code_mut(method: &mut Method) -> Result<&mut Vec<Instructio
 #[allow(dead_code)]
 unsafe fn get_manip_class(jni_env: *mut JNIEnv) -> Result<jclass, String> {
     let class_name = CString::new("stackparam/StackParamNative").unwrap();
-    let class = (**jni_env).FindClass.unwrap()(jni_env, class_name.as_ref().as_ptr());
+    let class = ((**jni_env).v1_4.FindClass)(jni_env, class_name.as_ref().as_ptr());
     return util::result_or_jni_ex(class, jni_env);
 }
 
